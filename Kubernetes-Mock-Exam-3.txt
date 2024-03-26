@@ -1,0 +1,625 @@
+Que:
+---
+
+An etcd backup is already stored at the path /opt/cluster1_backup_to_restore.db on the cluster1-controlplane node. Use /root/default.etcd as the --data-dir and restore it on the cluster1-controlplane node itself.
+
+
+You can ssh to the controlplane node by running ssh root@cluster1-controlplane from the student-node.
+
+Ans:
+---
+
+SSH into cluster1-controlplane node:
+
+student-node ~ ➜ ssh root@cluster1-controlplane
+
+
+
+Install etcd utility (if not installed already) and restore the backup:
+cluster1-controlplane ~ ➜ cd /tmp
+cluster1-controlplane ~ ➜ export RELEASE=$(curl -s https://api.github.com/repos/etcd-io/etcd/releases/latest | grep tag_name | cut -d '"' -f 4)
+cluster1-controlplane ~ ➜ wget https://github.com/etcd-io/etcd/releases/download/${RELEASE}/etcd-${RELEASE}-linux-amd64.tar.gz
+cluster1-controlplane ~ ➜ tar xvf etcd-${RELEASE}-linux-amd64.tar.gz ; cd etcd-${RELEASE}-linux-amd64
+cluster1-controlplane ~ ➜ mv etcd etcdctl  /usr/local/bin/
+cluster1-controlplane ~ ➜ etcdctl snapshot restore --data-dir /root/default.etcd /opt/cluster1_backup_to_restore.db 
+
+========================
+
+Que:
+---
+We have created a service account called green-sa-cka22-arch, a cluster role called green-role-cka22-arch and a cluster role binding called green-role-binding-cka22-arch.
+
+
+Update the permissions of this service account so that it can only get all the namespaces in cluster1.
+
+Ans:
+---
+
+Edit the green-role-cka22-arch to update permissions:
+
+student-node ~ ➜  kubectl edit clusterrole green-role-cka22-arch --context cluster1
+
+
+
+At the end add below code:
+
+- apiGroups:
+  - "*"
+  resources:
+  - namespaces
+  verbs:
+  - get
+
+
+
+You can verify it as below:
+
+student-node ~ ➜  kubectl auth can-i get namespaces --as=system:serviceaccount:default:green-sa-cka22-arch
+yes
+
+==========================
+
+Que:
+---
+
+Install etcd utility on cluster2-controlplane node so that we can take/restore etcd backups.
+
+
+You can ssh to the controlplane node by running ssh root@cluster2-controlplane from the student-node.
+
+Ans:
+---
+
+SSH into cluster2-controlplane node:
+
+student-node ~ ➜ ssh root@cluster2-controlplane
+
+
+
+Install etcd utility:
+cluster2-controlplane ~ ➜ cd /tmp
+cluster2-controlplane ~ ➜ export RELEASE=$(curl -s https://api.github.com/repos/etcd-io/etcd/releases/latest | grep tag_name | cut -d '"' -f 4)
+cluster2-controlplane ~ ➜ wget https://github.com/etcd-io/etcd/releases/download/${RELEASE}/etcd-${RELEASE}-linux-amd64.tar.gz
+cluster2-controlplane ~ ➜ tar xvf etcd-${RELEASE}-linux-amd64.tar.gz ; cd etcd-${RELEASE}-linux-amd64
+cluster2-controlplane ~ ➜ mv etcd etcdctl  /usr/local/bin/
+
+===========================
+
+Que:
+---
+​A pod called nginx-cka01-trb is running in the default namespace. There is a container called nginx-container running inside this pod that uses the image nginx:latest. There is another sidecar container called logs-container that runs in this pod.
+
+For some reason, this pod is continuously crashing. Identify the issue and fix it. Make sure that the pod is in a running state and you are able to access the website using the curl http://kodekloud-exam.app:30001 command on the controlplane node of cluster1.
+
+
+Ans:
+---
+
+Check the container logs:
+kubectl logs -f nginx-cka01-trb -c nginx-container
+
+You can see that its not able to pull the image.
+
+Edit the pod
+kubectl edit pod nginx-cka01-trb -o yaml
+    
+Change image tag from nginx:latst to nginx:latest
+
+Let's check now if the POD is in Running state
+
+kubectl get pod
+You will notice that its still crashing, so check the logs again:
+
+kubectl logs -f nginx-cka01-trb -c nginx-container
+
+From the logs you will notice that nginx-container is looking good now so it might be the sidecar container that is causing
+ issues. Let's check its logs.
+
+kubectl logs -f nginx-cka01-trb -c logs-container
+You will see some logs as below:
+
+cat: can't open '/var/log/httpd/access.log': No such file or directory
+cat: can't open '/var/log/httpd/error.log': No such file or directory
+
+Now, let's look into the sidecar container
+
+kubectl get pod nginx-cka01-trb -o yaml
+
+Under containers: check the command: section, this is the command which is failing. If you notice its looking for the logs under /var/log/httpd/ directory but the mounted volume for logs is /var/log/nginx (under volumeMounts:). So we need to fix this path:
+
+kubectl get pod nginx-cka01-trb -o yaml > /tmp/test.yaml
+vi /tmp/test.yaml
+Under command: change /var/log/httpd/access.log and /var/log/httpd/error.log to /var/log/nginx/access.log and /var/log/nginx/error.log respectively.
+
+Delete the existing POD now:
+
+kubectl delete pod nginx-cka01-trb
+Create new one from the template
+
+kubectl apply -f /tmp/test.yaml
+Let's check now if the POD is in Running state
+
+kubectl get pod
+It should be good now. So let's try to access the app.
+
+curl http://kodekloud-exam.app:30001
+You will see error
+
+curl: (7) Failed to connect to kodekloud-exam.app port 30001: Connection refused
+
+So you are not able to access the website, let's look into the service configuration.
+
+Edit the service
+kubectl edit svc nginx-service-cka01-trb -o yaml 
+
+Change app label under selector from httpd-app-cka01-trb to nginx-app-cka01-trb
+You should be able to access the website now.
+curl http://kodekloud-exam.app:30001
+
+===========================================
+
+Que:
+---
+There is a Cronjob called orange-cron-cka10-trb which is supposed to run every two minutes (i.e 13:02, 13:04, 13:06…14:02, 14:04…and so on). This cron targets the application running inside the orange-app-cka10-trb pod to make sure the app is accessible. The application has been exposed internally as a ClusterIP service.
+
+
+However, this cron is not running as per the expected schedule and is not running as intended.
+
+
+Make the appropriate changes so that the cronjob runs as per the required schedule and it passes the accessibility checks every-time.
+
+
+Ans:
+---
+Check the cron schedule
+kubectl get cronjob
+Make sure the schedule for orange-cron-cka10-trb crontjob is set to */2 * * * * if not then edit it.
+
+Also before that look for the issues why this cron is failing
+
+kubectl logs orange-cron-cka10-trb-xxxx
+You will see some error like
+
+curl: (6) Could not resolve host: orange-app-cka10-trb
+You will notice that the curl is trying to hit orange-app-cka10-trb directly but it is supposed to hit the relevant service which is orange-svc-cka10-trb so we need to fix the curl command.
+
+Edit the cronjob
+kubectl edit cronjob orange-cron-cka10-trb
+Change schedule * * * * * to */2 * * * *
+Change command curl orange-app-cka10-trb to curl orange-svc-cka10-trb
+Wait for 2 minutes to run again this cron and it should complete now.
+
+==============================================
+
+Que:
+---
+
+The green-deployment-cka15-trb deployment is having some issues since the corresponding POD is crashing and restarting multiple times continuously.
+
+
+Investigate the issue and fix it, make sure the POD is in running state and its stable (i.e NO RESTARTS!).
+
+Ans:
+---
+
+List the pods to check its status
+kubectl get pod
+its must have crashed already so lets look into the logs.
+
+kubectl logs -f green-deployment-cka15-trb-xxxx
+You will see some logs like these
+
+2022-09-18 17:13:25 98 [Note] InnoDB: Mutexes and rw_locks use GCC atomic builtins
+2022-09-18 17:13:25 98 [Note] InnoDB: Memory barrier is not used
+2022-09-18 17:13:25 98 [Note] InnoDB: Compressed tables use zlib 1.2.11
+2022-09-18 17:13:25 98 [Note] InnoDB: Using Linux native AIO
+2022-09-18 17:13:25 98 [Note] InnoDB: Using CPU crc32 instructions
+2022-09-18 17:13:25 98 [Note] InnoDB: Initializing buffer pool, size = 128.0M
+Killed
+This might be due to the resources issue, especially the memory, so let's try to recreate the POD to see if it helps.
+
+kubectl delete pod green-deployment-cka15-trb-xxxx
+Now watch closely the POD status
+
+kubectl get pod
+Pretty soon you will see the POD status has been changed to OOMKilled which confirms its the memory issue. So let's look into the resources that are assigned to this deployment.
+
+kubectl get deploy
+kubectl edit deploy green-deployment-cka15-trb
+Under resources: -> limits: change memory from 256Mi to 512Mi and save the changes.
+Now watch closely the POD status again
+
+kubectl get pod
+It should be stable now.
+
+======================================
+
+Que:
+---
+
+cluster4-node01 node that belongs to cluster4 seems to be in the NotReady state. Fix the issue and make sure this node is in Ready state.
+
+
+
+Note: You can ssh into the node using ssh cluster4-node01.
+
+Ans:
+---
+SSH into the cluster4-node01 and check if kubelet service is running
+ssh cluster4-node01
+systemctl status kubelet
+
+You will see its inactive, so try to start it.
+
+systemctl start kubelet
+Check again the status
+
+systemctl status kubelet
+Its still failing, so let's look into some latest error logs:
+
+journalctl -u kubelet --since "30 min ago" | grep 'Error:'
+
+You will see some errors as below:
+
+cluster4-node01 kubelet[6301]: Error: failed to construct kubelet dependencies: unable to load client CA file /etc/kubernetes/pki/CA.crt: open /etc/kubernetes/pki/CA.crt: no such file or directory
+
+Check if /etc/kubernetes/pki/CA.crt file exists:
+
+ls /etc/kubernetes/pki/
+You will notice that the file name is ca.crt instead of CA.crt so possibly kubelet is looking for a wrong file. Let's fix the config:
+
+vi /var/lib/kubelet/config.yaml
+  
+Change clientCAFile from /etc/kubernetes/pki/CA.crt to /etc/kubernetes/pki/ca.crt
+Try to start it again
+
+systemctl start kubelet
+Service should start now but there might be an error as below
+
+ReportingIn
+stance:""}': 'Post "https://cluster4-controlplane:6334/api/v1/namespaces/default/events": dial tcp 10.9.63.18:633
+4: connect: connection refused'(may retry after sleeping)
+Sep 18 09:21:47 cluster4-node01 kubelet[6803]: E0918 09:21:47.641184    6803 kubelet.go:2419] "Error getting node
+" err="node \"cluster4-node01\" not found"
+
+You must have noticed that its trying to connect to the api server on port 6334 but the default port for kube-apiserver is 6443. Let's fix this:
+	
+Edit the kubelet config
+vi /etc/kubernetes/kubelet.conf
+    
+Change server
+server: https://cluster4-controlplane:6334
+to
+
+server: https://cluster4-controlplane:6443
+Finally restart kublet service
+systemctl restart kubelet
+Check from the student-node now and cluster4-node01 should be ready now.
+kubectl get node --context=cluster4
+
+
+==================================
+
+Que:
+---
+We recently deployed a DaemonSet called logs-cka26-trb under kube-system namespace in cluster2 for collecting logs from all the cluster nodes including the controlplane node. However, at this moment, the DaemonSet is not creating any pod on the controlplane node.
+
+
+Troubleshoot the issue and fix it to make sure the pods are getting created on all nodes including the controlplane node.
+
+Ans:
+---
+Check the status of DaemonSet
+
+kubectl --context2 cluster2 get ds logs-cka26-trb -n kube-system
+
+You will find that DESIRED CURRENT READY etc have value 2 which means there are two pods that have been created. You can check the same by listing the PODs
+
+kubectl --context2 cluster2 get pod  -n kube-system
+You can check on which nodes these are created on
+
+kubectl --context2 cluster2 get pod <pod-name> -n kube-system -o wide
+
+Under NODE you will find the node name, so we can see that its not scheduled on the controlplane node which is because it must be missing the reqiured tolerations. Let's edit the DaemonSet to fix the tolerations
+
+kubectl --context2 cluster2 edit ds logs-cka26-trb -n kube-system
+Under tolerations: add below given tolerations as well
+
+- key: node-role.kubernetes.io/control-plane
+  operator: Exists
+  effect: NoSchedule
+Wait for some time PODs should schedule on all nodes now including the controlplane node.
+
+================================
+
+Que:
+---
+
+We have deployed a 2-tier web application on the cluster3 nodes in the canara-wl05 namespace. However, at the moment, the web app pod cannot establish a connection with the MySQL pod successfully.
+
+
+You can check the status of the application from the terminal by running the curl command with the following syntax:
+
+curl http://cluster3-controlplane:NODE-PORT
+
+
+
+
+To make the application work, create a new secret called db-secret-wl05 with the following key values: -
+
+1. DB_Host=mysql-svc-wl05
+2. DB_User=root
+3. DB_Password=password123
+
+
+Next, configure the web application pod to load the new environment variables from the newly created secret.
+
+
+Note: Check the web application again using the curl command, and the status of the application should be success.
+
+
+You can SSH into the cluster3 using ssh cluster3-controlplane command.
+
+
+Ans:
+---
+
+Set the correct context: -
+
+kubectl config use-context cluster3
+List the nodes: -
+
+kubectl get nodes -o wide
+Run the curl command to know the status of the application as follows: -
+
+ssh cluster2-controlplane
+
+curl http://10.17.63.11:31020
+<!doctype html>
+<title>Hello from Flask</title>
+...
+
+    <img src="/static/img/failed.png">
+    <h3> Failed connecting to the MySQL database. </h3>
+
+
+    <h2> Environment Variables: DB_Host=Not Set; DB_Database=Not Set; DB_User=Not Set; DB_Password=Not Set; 2003: Can&#39;t connect to MySQL server on &#39;localhost:3306&#39; (111 Connection refused) </h2>
+
+
+As you can see, the status of the application pod is failed.
+
+
+NOTE: - In your lab, IP addresses could be different.
+
+
+
+Let's create a new secret called db-secret-wl05 as follows: -
+
+kubectl create secret generic db-secret-wl05 -n canara-wl05 --from-literal=DB_Host=mysql-svc-wl05 --from-literal=DB_User=root --from-literal=DB_Password=password123
+
+After that, configure the newly created secret to the web application pod as follows: -
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: webapp-pod-wl05
+  name: webapp-pod-wl05
+  namespace: canara-wl05
+spec:
+  containers:
+  - image: kodekloud/simple-webapp-mysql
+    name: webapp-pod-wl05
+    envFrom:
+    - secretRef:
+        name: db-secret-wl05
+then use the kubectl replace command: -
+
+kubectl replace -f <FILE-NAME> --force
+
+
+In the end, make use of the curl command to check the status of the application pod. The status of the application should be success.
+
+curl http://10.17.63.11:31020
+
+<!doctype html>
+<title>Hello from Flask</title>
+<body style="background: #39b54b;"></body>
+<div style="color: #e4e4e4;
+    text-align:  center;
+    height: 90px;
+    vertical-align:  middle;">
+	
+	<img src="/static/img/success.jpg">
+    <h3> Successfully connected to the MySQL database.</h3>
+	
+	
+===================================
+
+Que:
+---
+
+We want to deploy a python based application on the cluster using a template located at /root/olive-app-cka10-str.yaml on student-node. However, before you proceed we need to make some modifications to the YAML file as per details given below:
+
+
+The YAML should also contain a persistent volume claim with name olive-pvc-cka10-str to claim a 100Mi of storage from olive-pv-cka10-str PV.
+
+
+Update the deployment to add a sidecar container, which can use busybox image (you might need to add a sleep command for this container to keep it running.)
+
+Share the python-data volume with this container and mount the same at path /usr/src. Make sure this container only has read permissions on this volume.
+
+
+Finally, create a pod using this YAML and make sure the POD is in Running state.
+
+
+Ans:
+---
+Update olive-app-cka10-str.yaml template so that it looks like as below:
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: olive-pvc-cka10-str
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: olive-stc-cka10-str
+  volumeName: olive-pv-cka10-str
+  resources:
+    requests:
+      storage: 100Mi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: olive-app-cka10-str
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: olive-app-cka10-str
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - cluster1-node01
+      containers:
+      - name: python
+        image: poroko/flask-demo-app
+        ports:
+        - containerPort: 5000
+        volumeMounts:
+        - name: python-data
+          mountPath: /usr/share/
+      - name: busybox
+        image: busybox
+        command:
+          - "bin/sh"
+          - "-c"
+          - "sleep 10000"
+        volumeMounts:
+          - name: python-data
+            mountPath: "/usr/src"
+            readOnly: true
+      volumes:
+      - name: python-data
+        persistentVolumeClaim:
+          claimName: olive-pvc-cka10-str
+  selector:
+    matchLabels:
+      app: olive-app-cka10-str
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: olive-svc-cka10-str
+spec:
+  type: NodePort
+  ports:
+    - port: 5000
+      nodePort: 32006
+  selector:
+    app: olive-app-cka10-str
+Apply the template:
+kubectl apply -f olive-app-cka10-str.yaml
+
+
+===================================
+
+Que:
+---
+John is setting up a two tier application stack that is supposed to be accessible using the service curlme-cka01-svcn. To test that the service is accessible, he is using a pod called curlpod-cka01-svcn. However, at the moment, he is unable to get any response from the application.
+
+
+
+Troubleshoot and fix this issue so the application stack is accessible.
+
+
+
+While you may delete and recreate the service curlme-cka01-svcn, please do not alter it in anyway.
+
+
+Ans:
+---
+
+Test if the service curlme-cka01-svcn is accessible from pod curlpod-cka01-svcn or not.
+
+
+kubectl exec curlpod-cka01-svcn -- curl curlme-cka01-svcn
+
+.....
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:--  0:00:10 --:--:--     0
+
+
+We did not get any response. Check if the service is properly configured or not.
+
+
+kubectl describe svc curlme-cka01-svcn ''
+
+....
+Name:              curlme-cka01-svcn
+Namespace:         default
+Labels:            <none>
+Annotations:       <none>
+Selector:          run=curlme-ckaO1-svcn
+Type:              ClusterIP
+IP Family Policy:  SingleStack
+IP Families:       IPv4
+IP:                10.109.45.180
+IPs:               10.109.45.180
+Port:              <unset>  80/TCP
+TargetPort:        80/TCP
+Endpoints:         <none>
+Session Affinity:  None
+Events:            <none>
+
+
+The service has no endpoints configured. As we can delete the resource, let's delete the service and create the service again.
+
+To delete the service, use the command 
+kubectl delete svc curlme-cka01-svcn.
+You can create the service using imperative way or declarative way.
+
+
+Using imperative command:
+kubectl expose pod curlme-cka01-svcn --port=80
+
+
+Using declarative manifest:
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    run: curlme-cka01-svcn
+  name: curlme-cka01-svcn
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    run: curlme-cka01-svcn
+  type: ClusterIP
+
+
+You can test the connection from curlpod-cka-1-svcn using following.
+
+kubectl exec curlpod-cka01-svcn -- curl curlme-cka01-svcn
+
+==========================
+
