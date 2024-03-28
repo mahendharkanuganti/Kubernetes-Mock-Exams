@@ -1,0 +1,545 @@
+
+Que1:
+---
+
+The deployment called web-dp-cka17-trb has 0 out of 1 pods up and running. Troubleshoot this issue and fix it. Make sure all required POD(s) are in running state and stable (not restarting).
+
+The application runs on port 80 inside the container and is exposed on the node port 30090.
+
+
+Ans:
+---
+List out the PODs
+kubectl get pod
+Let's look into the relevant events:
+
+kubectl get event --field-selector involvedObject.name=<pod-name>
+You should see some errors as below:
+
+Warning   FailedScheduling   pod/web-dp-cka17-trb-9bdd6779-fm95t   0/3 nodes are available: 3 persistentvolumeclaim "web-pvc-cka17-trbl" not found. preemption: 0/3 nodes are available: 3 Preemption is not helpful for scheduling.
+From the error we can see that its something related to the PVCs. So let' look into that.
+
+kubectl get pv
+kubectl get pvc
+You will notice that web-pvc-cka17-trb is stuck in pending and also the capacity of web-pv-cka17-trb volume is 100Mi.
+Now let's dig more into the PVC:
+
+kubectl get pvc web-pvc-cka17-trb -o yaml
+Notice the storage which is 150Mi which means its trying to claim 150Mi of storage from a 100Mi PV. So let's edit this PV.
+
+kubectl edit pv web-pv-cka17-trb
+Change storage: 100Mi to storage: 150Mi
+Check again the pvc
+kubectl get pvc
+web-pvc-cka17-trb should be good now. let's see the PODs
+
+kubectl get pod
+POD should not be in pending state now but it must be crashing with Init:CrashLoopBackOff status, which means somehow the init container is crashing. So let's check the logs.
+
+kubectl get event --field-selector involvedObject.name=<pod-name>
+You should see someting like
+
+Warning   Failed      pod/web-dp-cka17-trb-67c9bdcd85-4tvpr   Error: failed to create containerd task: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: exec: "/bin/bsh\\": stat /bin/bsh\: no such file or directory: unknown
+Let's look into the deployment:
+
+kubectl edit deploy web-dp-cka17-trb
+Under initContainers: -> - command: change /bin/bsh\ to /bin/bash
+let's see the PODs
+kubectl get pod
+Wait for some time to make sure it is stable, but you will notice that its restart so still something must be wrong.
+
+So let's check the events again.
+
+kubectl get event --field-selector involvedObject.name=<pod-name>
+You should see someting like
+
+Warning   Unhealthy   pod/web-dp-cka17-trb-647f69f8bd-67xmx   Liveness probe failed: Get "http://10.50.64.1:81/": dial tcp 10.50.64.1:81: connect: connection refused
+Seems like its not able to connect to a service, let's look into the deployment to understand
+
+kubectl edit deploy web-dp-cka17-trb
+Notice that containerPort: 80 but under livenessProbe: the port: 81 so seems like livenessProbe is using wrong port. let's change port: 81 to port: 80
+
+See the PODs now
+
+kubectl get pod
+It should be good now.
+
+
+============================================
+
+Que2:
+---
+One of the nginx based pod called cyan-pod-cka28-trb is running under cyan-ns-cka28-trb namespace and it is exposed within the cluster using cyan-svc-cka28-trb service.
+
+This is a restricted pod so a network policy called cyan-np-cka28-trb has been created in the same namespace to apply some restrictions on this pod.
+
+
+Two other pods called cyan-white-cka28-trb1 and cyan-black-cka28-trb are also running in the default namespace.
+
+
+The nginx based app running on the cyan-pod-cka28-trb pod is exposed internally on the default nginx port (80).
+
+
+Expectation: This app should only be accessible from the cyan-white-cka28-trb1 pod.
+
+
+Problem: This app is not accessible from anywhere.
+
+
+Troubleshoot this issue and fix the connectivity as per the requirement listed above.
+
+
+Note: You can exec into cyan-white-cka28-trb and cyan-black-cka28-trb pods and test connectivity using the curl utility.
+
+
+You may update the network policy, but make sure it is not deleted from the cyan-ns-cka28-trb namespace.
+
+
+
+Ans:
+---
+
+Let's look into the network policy
+
+kubectl edit networkpolicy cyan-np-cka28-trb -n cyan-ns-cka28-trb
+
+Under spec: -> egress: you will notice there is no cidr: block has been added, since there is no restrcitions on egress traffic so we can update it as below. Further you will notice that the port used in the policy is 8080 but the app is running on default port which is 80 so let's update this as well (under egress and ingress):
+
+Change port: 8080 to port: 80
+- ports:
+  - port: 80
+    protocol: TCP
+  to:
+  - ipBlock:
+      cidr: 0.0.0.0/0
+	  
+Now, lastly notice that there is no POD selector has been used in ingress section but this app is supposed to be accessible from cyan-white-cka28-trb pod under default namespace. So let's edit it to look like as below:
+
+ingress:
+- from:
+  - namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: default
+   podSelector:
+      matchLabels:
+        app: cyan-white-cka28-trb
+Now, let's try to access the app from cyan-white-pod-cka28-trb
+
+kubectl exec -it cyan-white-cka28-trb -- sh
+curl cyan-svc-cka28-trb.cyan-ns-cka28-trb.svc.cluster.local
+Also make sure its not accessible from the other pod(s)
+
+kubectl exec -it cyan-black-cka28-trb -- sh
+curl cyan-svc-cka28-trb.cyan-ns-cka28-trb.svc.cluster.local
+It should not work from this pod. So its looking good now.
+
+=====================================
+
+Que3:
+---
+
+We recently deployed a DaemonSet called logs-cka26-trb under kube-system namespace in cluster2 for collecting logs from all the cluster nodes including the controlplane node. However, at this moment, the DaemonSet is not creating any pod on the controlplane node.
+
+
+Troubleshoot the issue and fix it to make sure the pods are getting created on all nodes including the controlplane node.
+
+
+Ans:
+---
+
+Check the status of DaemonSet
+
+kubectl --context2 cluster2 get ds logs-cka26-trb -n kube-system
+You will find that DESIRED CURRENT READY etc have value 2 which means there are two pods that have been created. You can check the same by listing the PODs
+
+kubectl --context2 cluster2 get pod  -n kube-system
+You can check on which nodes these are created on
+
+kubectl --context2 cluster2 get pod <pod-name> -n kube-system -o wide
+
+Under NODE you will find the node name, so we can see that its not scheduled on the controlplane node which is because it must be missing the reqiured tolerations. Let's edit the DaemonSet to fix the tolerations
+
+kubectl --context2 cluster2 edit ds logs-cka26-trb -n kube-system
+Under tolerations: add below given tolerations as well
+
+- key: node-role.kubernetes.io/control-plane
+  operator: Exists
+  effect: NoSchedule
+Wait for some time PODs should schedule on all nodes now including the controlplane node.
+
+
+==============================
+
+Que4:
+---
+In the dev-wl07 namespace, one of the developers has performed a rolling update and upgraded the application to a newer version. But somehow, application pods are not being created.
+
+
+To get back the working state, rollback the application to the previous version .
+
+
+After rolling the deployment back, on the controlplane node, save the image currently in use to the /root/rolling-back-record.txt file and increase the replica count to the 5.
+
+
+You can SSH into the cluster1 using ssh cluster1-controlplane command.
+
+
+Ans:
+---
+Run the command to change the context: -
+
+kubectl config use-context cluster1
+
+
+Check the status of the pod: -
+
+kubectl get pods -n dev-wl07
+
+
+One of the pods is in an error state. As a quick fix, we need to rollback to the previous revision as follows: -
+
+kubectl rollout undo -n dev-wl07 deploy webapp-wl07
+
+
+After successful rolling back, inspect the updated image: -
+
+kubectl describe deploy -n dev-wl07 webapp-wl07 | grep -i image
+
+
+On the Controlplane node, save the image name to the given path /root/rolling-back-record.txt: -
+
+ssh cluster1-controlplane
+
+echo "kodekloud/webapp-color" > /root/rolling-back-record.txt
+
+
+And increase the replica count to the 5 with help of kubectl scale command: -
+
+kubectl scale deploy -n dev-wl07 webapp-wl07 --replicas=5
+
+
+Verify it by running the command: kubectl get deploy -n dev-wl07
+
+==================================
+
+Que5:
+---
+
+Create a new deployment called ocean-tv-wl09 in the default namespace using the image kodekloud/webapp-color:v1.
+Use the following specs for the deployment:
+
+
+1. Replica count should be 3.
+
+2. Set the Max Unavailable to 40% and Max Surge to 55%.
+
+3. Create the deployment and ensure all the pods are ready.
+
+4. After successful deployment, upgrade the deployment image to kodekloud/webapp-color:v2 and inspect the deployment rollout status.
+
+5. Check the rolling history of the deployment and on the student-node, save the current revision count number to the /opt/revision-count.txt file.
+
+6. Finally, perform a rollback and revert back the deployment image to the older version.
+
+
+
+Ans:
+---
+
+Set the correct context: -
+
+kubectl config use-context cluster1
+
+
+Use the following template to create a deployment called ocean-tv-wl09: -
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ocean-tv-wl09
+  name: ocean-tv-wl09
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ocean-tv-wl09
+  strategy: 
+   type: RollingUpdate
+   rollingUpdate:
+     maxUnavailable: 40%
+     maxSurge: 55%
+  template:
+    metadata:
+      labels:
+        app: ocean-tv-wl09
+    spec:
+      containers:
+      - image: kodekloud/webapp-color:v1
+        name: webapp-color
+
+
+Now, create the deployment by using the kubectl create -f command in the default namespace: -
+
+kubectl create -f <FILE-NAME>.yaml
+
+
+After sometime, upgrade the deployment image to kodekloud/webapp-color:v2: -
+
+kubectl set image deploy ocean-tv-wl09 webapp-color=kodekloud/webapp-color:v2
+
+
+And check out the rollout history of the deployment ocean-tv-wl09: -
+
+kubectl rollout history deploy ocean-tv-wl09
+deployment.apps/ocean-tv-wl09 
+REVISION  CHANGE-CAUSE
+1         <none>
+2         <none>
+
+
+NOTE: - Revision count is 2. In your lab, it could be different.
+
+
+
+On the student-node, store the revision count to the given file: -
+
+echo "2" > /opt/revision-count.txt
+
+
+In final task, rollback the deployment image to an old version: -
+
+kubectl rollout undo deployment ocean-tv-wl09
+
+
+Verify the image name by using the following command: -
+
+kubectl describe deploy ocean-tv-wl09
+
+
+It should be kodekloud/webapp-color:v1 image.
+
+
+===================================
+
+Que6:
+---
+A pod definition file is created at /root/peach-pod-cka05-str.yaml on the student-node. Update this manifest file to create a persistent volume claim called peach-pvc-cka05-str to claim a 100Mi of storage from peach-pv-cka05-str PV (this is already created). Use the access mode ReadWriteOnce.
+
+
+Further add peach-pvc-cka05-str PVC to peach-pod-cka05-str POD and mount the volume at /var/www/html location. Ensure that the pod is running and the PV is bound.
+
+Ans:
+---
+
+Update /root/peach-pod-cka05-str.yaml template file to create a PVC to utilise the same in POD template.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: peach-pvc-cka05-str
+spec:
+  volumeName: peach-pv-cka05-str
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: peach-pod-cka05-str
+spec:
+  containers:
+  - image: nginx
+    name: nginx
+    volumeMounts:
+      - mountPath: "/var/www/html"
+        name: nginx-volume
+  volumes:
+    - name: nginx-volume
+      persistentVolumeClaim:
+        claimName: peach-pvc-cka05-str
+Apply the template:
+kubectl apply -f /root/peach-pod-cka05-str.yaml
+
+==============================
+
+Que7:
+---
+Create a storage class with the name banana-sc-cka08-str as per the properties given below:
+
+
+- Provisioner should be kubernetes.io/no-provisioner,
+
+- Volume binding mode should be WaitForFirstConsumer.
+
+- Volume expansion should be enabled.
+
+
+Ans:
+---
+
+Create a yaml template as below:
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: banana-sc-cka08-str
+provisioner: kubernetes.io/no-provisioner
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+Apply the template:
+kubectl apply -f <template-file-name>.yaml
+
+==================================
+
+Que8:
+---
+Create a loadbalancer service with name wear-service-cka09-svcn to expose the deployment webapp-wear-cka09-svcn application in app-space namespace.
+
+
+Ans:
+---
+
+Switch to cluster3 :
+
+
+
+kubectl config use-context cluster3
+
+
+
+On student node run the command:
+
+
+student-node ~ ➜  kubectl expose -n app-space deployment webapp-wear-cka09-svcn --type=LoadBalancer --name=wear-service-cka09-svcn --port=8080
+
+service/wear-service-cka09-svcn exposed
+
+student-node ~ ➜  k get svc -n app-space
+NAME                      TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)          AGE
+wear-service-cka09-svcn   LoadBalancer   10.43.68.233   172.25.0.14   8080:32109/TCP   14s
+
+=====================================
+
+Que9:
+---
+John is setting up a two tier application stack that is supposed to be accessible using the service curlme-cka01-svcn. To test that the service is accessible, he is using a pod called curlpod-cka01-svcn. However, at the moment, he is unable to get any response from the application.
+
+
+
+Troubleshoot and fix this issue so the application stack is accessible.
+
+
+
+While you may delete and recreate the service curlme-cka01-svcn, please do not alter it in anyway.
+
+
+Ans:
+---
+Test if the service curlme-cka01-svcn is accessible from pod curlpod-cka01-svcn or not.
+
+
+kubectl exec curlpod-cka01-svcn -- curl curlme-cka01-svcn
+
+.....
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:--  0:00:10 --:--:--     0
+
+
+We did not get any response. Check if the service is properly configured or not.
+
+
+kubectl describe svc curlme-cka01-svcn ''
+
+....
+Name:              curlme-cka01-svcn
+Namespace:         default
+Labels:            <none>
+Annotations:       <none>
+Selector:          run=curlme-ckaO1-svcn
+Type:              ClusterIP
+IP Family Policy:  SingleStack
+IP Families:       IPv4
+IP:                10.109.45.180
+IPs:               10.109.45.180
+Port:              <unset>  80/TCP
+TargetPort:        80/TCP
+Endpoints:         <none>
+Session Affinity:  None
+Events:            <none>
+
+
+The service has no endpoints configured. As we can delete the resource, let's delete the service and create the service again.
+
+To delete the service, use the command kubectl delete svc curlme-cka01-svcn.
+You can create the service using imperative way or declarative way.
+
+
+Using imperative command:
+kubectl expose pod curlme-cka01-svcn --port=80
+
+
+Using declarative manifest:
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    run: curlme-cka01-svcn
+  name: curlme-cka01-svcn
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    run: curlme-cka01-svcn
+  type: ClusterIP
+
+
+You can test the connection from curlpod-cka-1-svcn using following.
+kubectl exec curlpod-cka01-svcn -- curl curlme-cka01-svcn
+
+===========================
+
+Que10:
+---
+Create a nginx pod called nginx-resolver-cka06-svcn using image nginx, expose it internally with a service called nginx-resolver-service-cka06-svcn.
+
+
+
+Test that you are able to look up the service and pod names from within the cluster. Use the image: busybox:1.28 for dns lookup. Record results in /root/CKA/nginx.svc.cka06.svcn and /root/CKA/nginx.pod.cka06.svcn
+
+Ans:
+---
+To create a pod nginx-resolver-cka06-svcn and expose it internally:
+
+
+
+student-node ~ ➜ kubectl run nginx-resolver-cka06-svcn --image=nginx 
+student-node ~ ➜ kubectl expose pod/nginx-resolver-cka06-svcn --name=nginx-resolver-service-cka06-svcn --port=80 --target-port=80 --type=ClusterIP 
+
+
+
+To create a pod test-nslookup. Test that you are able to look up the service and pod names from within the cluster:
+
+
+
+student-node ~ ➜  kubectl run test-nslookup --image=busybox:1.28 --rm -it --restart=Never -- nslookup nginx-resolver-service-cka06-svcn
+student-node ~ ➜  kubectl run test-nslookup --image=busybox:1.28 --rm -it --restart=Never -- nslookup nginx-resolver-service-cka06-svcn > /root/CKA/nginx.svc.cka06.svcn
+
+
+
+Get the IP of the nginx-resolver-cka06-svcn pod and replace the dots(.) with hyphon(-) which will be used below.
+
+student-node ~ ➜  kubectl get pod nginx-resolver-cka06-svcn -o wide
+student-node ~ ➜  IP=`kubectl get pod nginx-resolver-cka06-svcn -o wide --no-headers | awk '{print $6}' | tr '.' '-'`
+student-node ~ ➜  kubectl run test-nslookup --image=busybox:1.28 --rm -it --restart=Never -- nslookup $IP.default.pod > /root/CKA/nginx.pod.cka06.svcn
+
+======================================
+
+
