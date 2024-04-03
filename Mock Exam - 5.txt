@@ -1,0 +1,155 @@
+
+Que1:
+---
+A pod called elastic-app-cka02-arch is running in the default namespace. The YAML file for this pod is available at /root/elastic-app-cka02-arch.yaml on the student-node. The single application container in this pod writes logs to the file /var/log/elastic-app.log.
+
+
+One of our logging mechanisms needs to read these logs to send them to an upstream logging server but we don't want to increase the read overhead for our main application container so recreate this POD with an additional sidecar container that will run along with the application container and print to the STDOUT by running the command tail -f /var/log/elastic-app.log. You can use busybox image for this sidecar container.
+
+Ans:
+---
+
+Recreate the pod with a new container called sidecar. Update the /root/elastic-app-cka02-arch.yaml YAML file as shown below:
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: elastic-app-cka02-arch
+spec:
+  containers:
+  - name: elastic-app
+    image: busybox:1.28
+    args:
+    - /bin/sh
+    - -c
+    - >
+      mkdir /var/log; 
+      i=0;
+      while true;
+      do
+        echo "$(date) INFO $i" >> /var/log/elastic-app.log;
+        i=$((i+1));
+        sleep 1;
+      done
+    volumeMounts:
+    - name: varlog
+      mountPath: /var/log
+  - name: sidecar
+    image: busybox:1.28
+    args: [/bin/sh, -c, 'tail -f  /var/log/elastic-app.log']
+    volumeMounts:
+    - name: varlog
+      mountPath: /var/log
+  volumes:
+  - name: varlog
+    emptyDir: {}
+	
+
+======================================
+
+Que2:
+---
+
+There is an existing persistent volume called orange-pv-cka13-trb. A persistent volume claim called orange-pvc-cka13-trb is created to claim storage from orange-pv-cka13-trb.
+
+
+However, this PVC is stuck in a Pending state. As of now, there is no data in the volume.
+
+
+Troubleshoot and fix this issue, making sure that orange-pvc-cka13-trb PVC is in Bound state.
+
+
+Ans:
+---
+
+List the PVC to check its status
+kubectl  get pvc
+So we can see orange-pvc-cka13-trb PVC is in Pending state and its requesting a storage of 150Mi. Let's look into the events
+
+kubectl get events --sort-by='.metadata.creationTimestamp' -A
+You will see some errors as below:
+
+Warning   VolumeMismatch            persistentvolumeclaim/orange-pvc-cka13-trb          Cannot bind to requested volume "orange-pv-cka13-trb": requested PV is too small
+Let's look into orange-pv-cka13-trb volume
+
+kubectl get pv
+We can see that orange-pv-cka13-trb volume is of 100Mi capacity which means its too small to request 150Mi of storage.
+Let's edit orange-pvc-cka13-trb PVC to adjust the storage requested.
+
+kubectl get pvc orange-pvc-cka13-trb -o yaml > /tmp/orange-pvc-cka13-trb.yaml
+vi /tmp/orange-pvc-cka13-trb.yaml
+Under resources: -> requests: -> storage: change 150Mi to 100Mi and save.
+Delete old PVC and apply the change:
+kubectl delete pvc orange-pvc-cka13-trb
+kubectl apply -f /tmp/orange-pvc-cka13-trb.yaml 
+
+===================================
+
+Que3:
+---
+One of the nginx based pod called cyan-pod-cka28-trb is running under cyan-ns-cka28-trb namespace and it is exposed within the cluster using cyan-svc-cka28-trb service.
+
+This is a restricted pod so a network policy called cyan-np-cka28-trb has been created in the same namespace to apply some restrictions on this pod.
+
+
+Two other pods called cyan-white-cka28-trb1 and cyan-black-cka28-trb are also running in the default namespace.
+
+
+The nginx based app running on the cyan-pod-cka28-trb pod is exposed internally on the default nginx port (80).
+
+
+Expectation: This app should only be accessible from the cyan-white-cka28-trb1 pod.
+
+
+Problem: This app is not accessible from anywhere.
+
+
+Troubleshoot this issue and fix the connectivity as per the requirement listed above.
+
+
+Note: You can exec into cyan-white-cka28-trb and cyan-black-cka28-trb pods and test connectivity using the curl utility.
+
+
+You may update the network policy, but make sure it is not deleted from the cyan-ns-cka28-trb namespace.
+
+Ans:
+---
+
+Let's look into the network policy
+
+kubectl edit networkpolicy cyan-np-cka28-trb -n cyan-ns-cka28-trb
+
+Under spec: -> egress: you will notice there is not cidr: block has been added, since there is no restrcitions on egress traffic so we can update it as below. Further you will notice that the port used in the policy is 8080 but the app is running on default port which is 80 so let's update this as well (under egress and ingress):
+
+Change port: 8080 to port: 80
+- ports:
+  - port: 80
+    protocol: TCP
+  to:
+  - ipBlock:
+      cidr: 0.0.0.0/0
+Now, lastly notice that there is no POD selector has been used in ingress section but this app is supposed to be accessible from cyan-white-cka28-trb pod under default namespace. So let's edit it to look like as below:
+
+ingress:
+- from:
+  - namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: default
+   podSelector:
+      matchLabels:
+        app: cyan-white-cka28-trb
+Now, let's try to access the app from cyan-white-pod-cka28-trb
+
+kubectl exec -it cyan-white-cka28-trb -- sh
+curl cyan-svc-cka28-trb.cyan-ns-cka28-trb.svc.cluster.local
+Also make sure its not accessible from the other pod(s)
+
+kubectl exec -it cyan-black-cka28-trb -- sh
+curl cyan-svc-cka28-trb.cyan-ns-cka28-trb.svc.cluster.local
+It should not work from this pod. So its looking good now.
+
+====================================
+
+Que4:
+---
+
