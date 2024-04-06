@@ -1,0 +1,397 @@
+
+Que1:
+---
+Find the node across all clusters that consumes the most memory and store the result to the file /opt/high_memory_node in the following format cluster_name,node_name.
+
+The node could be in any clusters that are currently configured on the student-node.
+
+Ans:
+---
+
+Check out the metrics for all node across all clusters:
+
+student-node ~ ➜  kubectl top node --context cluster1 --no-headers | sort -nr -k4 | head -1
+cluster1-controlplane   124m   1%    768Mi   1%    
+
+student-node ~ ➜  kubectl top node --context cluster2 --no-headers | sort -nr -k4 | head -1
+cluster2-controlplane   79m   0%    873Mi   1%    
+
+student-node ~ ➜  kubectl top node --context cluster3 --no-headers | sort -nr -k4 | head -1
+cluster3-controlplane   78m   0%    902Mi   1%  
+
+student-node ~ ➜  kubectl top node --context cluster4 --no-headers | sort -nr -k4 | head -1
+cluster4-controlplane   78m   0%    901Mi   1%    
+
+student-node ~ ➜  
+
+
+
+Using this, find the node that uses most memory. In this case, it is cluster3-controlplane on cluster3.
+Save the result in the correct format to the file:
+
+student-node ~ ➜  echo cluster3,cluster3-controlplane > /opt/high_memory_node 
+
+================================
+
+====================================
+
+Que4:
+---
+
+One of our Junior DevOps engineers have deployed a pod nginx-wl06 on the cluster3-controlplane node. However, while specifying the resource limits, instead of using Mebibyte as the unit, Gebibyte was used.
+
+As a result, the node doesn't have sufficient resources to deploy this pod and it is stuck in a pending state
+
+Fix the units and re-deploy the pod (Delete and recreate the pod if needed).
+
+
+
+Ans:
+---
+Solution
+Set the correct context: -
+
+kubectl config use-context cluster3
+Run the following command to check the pending pods on all the namespaces: -
+
+kubectl get pods -A
+
+
+After that, inspect the pod Events as follows: -
+
+kubectl get pods -A | grep -i pending
+
+kubectl describe po nginx-wl06
+
+
+Make use of the kubectl edit command to update the values from Gi to Mi:-
+
+kubectl edit po nginx-wl06
+
+
+It will save the temporary file under the /tmp/ directory. Use the kubectl replace command as follows: -
+
+kubectl replace -f /tmp/kubectl-edit-xxxx.yaml --force
+
+
+It will delete the existing pod and will re-create it again with new changes.
+
+===============================
+
+Que5:
+---
+Create a ReplicaSet with name checker-cka10-svcn in ns-12345-svcn namespace with image registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3.
+
+
+Make sure to specify the below specs as well:
+
+
+command sleep 3600
+replicas set to 2
+container name: dns-image
+
+
+
+Once the checker pods are up and running, store the output of the command nslookup kubernetes.default from any one of the checker pod into the file /root/dns-output-12345-cka10-svcn on student-node.
+
+Ans:
+---
+
+Change to the cluster4 context before attempting the task:
+
+kubectl config use-context cluster3
+
+
+
+Create the ReplicaSet as per the requirements:
+
+
+
+kubectl apply -f - << EOF
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  creationTimestamp: null
+  name: ns-12345-svcn
+spec: {}
+status: {}
+
+---
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: checker-cka10-svcn
+  namespace: ns-12345-svcn
+  labels:
+    app: dns
+    tier: testing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      tier: testing
+  template:
+    metadata:
+      labels:
+        tier: testing
+    spec:
+      containers:
+      - name: dns-image
+        image: registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3
+        command:
+          - sleep
+          - "3600"
+EOF
+
+
+
+Now let's test if the nslookup command is working :
+
+
+student-node ~ ➜  k get pods -n ns-12345-svcn 
+NAME                       READY   STATUS    RESTARTS   AGE
+checker-cka10-svcn-d2cd2   1/1     Running   0          12s
+checker-cka10-svcn-qj8rc   1/1     Running   0          12s
+
+student-node ~ ➜  POD_NAME=`k get pods -n ns-12345-svcn --no-headers | head -1 | awk '{print $1}'`
+
+student-node ~ ➜  kubectl exec -n ns-12345-svcn -i -t $POD_NAME -- nslookup kubernetes.default
+;; connection timed out; no servers could be reached
+
+command terminated with exit code 1
+
+
+
+There seems to be a problem with the name resolution. Let's check if our coredns pods are up and if any service exists to reach them:
+
+
+
+student-node ~ ➜  k get pods -n kube-system | grep coredns
+coredns-6d4b75cb6d-cprjz                        1/1     Running   0             42m
+coredns-6d4b75cb6d-fdrhv                        1/1     Running   0             42m
+
+student-node ~ ➜  k get svc -n kube-system 
+NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                  AGE
+kube-dns   ClusterIP   10.96.0.10   <none>        53/UDP,53/TCP,9153/TCP   62m
+
+
+
+Everything looks okay here but the name resolution problem exists, let's see if the kube-dns service have any active endpoints:
+
+student-node ~ ➜  kubectl get ep -n kube-system kube-dns 
+NAME       ENDPOINTS   AGE
+kube-dns   <none>      63m
+
+
+
+Finally, we have our culprit.
+
+
+If we dig a little deeper, we will it is using wrong labels and selector:
+
+
+
+student-node ~ ➜  kubectl describe svc -n kube-system kube-dns 
+Name:              kube-dns
+Namespace:         kube-system
+....
+Selector:          k8s-app=core-dns
+Type:              ClusterIP
+...
+
+student-node ~ ➜  kubectl get deploy -n kube-system --show-labels | grep coredns
+coredns   2/2     2            2           66m   k8s-app=kube-dns
+
+
+
+Let's update the kube-dns service it to point to correct set of pods:
+
+
+
+student-node ~ ➜  kubectl patch service -n kube-system kube-dns -p '{"spec":{"selector":{"k8s-app": "kube-dns"}}}'
+service/kube-dns patched
+
+student-node ~ ➜  kubectl get ep -n kube-system kube-dns 
+NAME       ENDPOINTS                                              AGE
+kube-dns   10.50.0.2:53,10.50.192.1:53,10.50.0.2:53 + 3 more...   69m
+
+
+
+NOTE: We can use any method to update kube-dns service. In our case, we have used kubectl patch command.
+
+
+
+
+Now let's store the correct output to /root/dns-output-12345-cka10-svcn:
+
+
+
+student-node ~ ➜  kubectl exec -n ns-12345-svcn -i -t $POD_NAME -- nslookup kubernetes.default
+Server:         10.96.0.10
+Address:        10.96.0.10#53
+
+Name:   kubernetes.default.svc.cluster.local
+Address: 10.96.0.1
+
+
+
+student-node ~ ➜  kubectl exec -n ns-12345-svcn -i -t $POD_NAME -- nslookup kubernetes.default > /root/dns-output-12345-cka10-svcn
+
+====================================
+
+Que6:
+---
+Create a deployment named hr-web-app-cka08-svcn using the image kodekloud/webapp-color with 2 replicas.
+
+
+
+Expose the hr-web-app-cka08-svcn as service hr-web-app-service-cka08-svcn application on port 30082 on the nodes of the cluster.
+
+The web application listens on port 8080.
+
+Ans:
+---
+On student-node, use the command: kubectl create deployment hr-web-app-cka08-svcn --image=kodekloud/webapp-color --replicas=2
+
+
+
+Now we can run the command: kubectl expose deployment hr-web-app-cka08-svcn --type=NodePort --port=8080 --name=hr-web-app-service-cka08-svcn --dry-run=client -o yaml > hr-web-app-service-cka08-svcn.yaml to generate a service definition file.
+
+
+
+
+Now, in generated service definition file add the nodePort field with the given port number under the ports section and create a service.
+
+===================
+
+Que7:
+---
+Create a ClusterIP service .i.e. service-3421-svcn in the spectra-1267 ns which should expose the pods namely pod-23 and pod-21 with port set to 8080 and targetport to 80.
+
+
+
+Part II:
+
+
+
+Store the pod names and their ip addresses from the spectra-1267 ns at /root/pod_ips_cka05_svcn where the output is sorted by their IP's.
+
+Please ensure the format as shown below:
+
+
+
+POD_NAME        IP_ADDR
+pod-1           ip-1
+pod-3           ip-2
+pod-2           ip-3
+...
+
+
+Ans:
+---
+
+Switching to cluster3:
+
+
+
+kubectl config use-context cluster3
+
+
+
+The easiest way to route traffic to a specific pod is by the use of labels and selectors . List the pods along with their labels:
+
+
+
+student-node ~ ➜  kubectl get pods --show-labels -n spectra-1267
+NAME     READY   STATUS    RESTARTS   AGE     LABELS
+pod-12   1/1     Running   0          5m21s   env=dev,mode=standard,type=external
+pod-34   1/1     Running   0          5m20s   env=dev,mode=standard,type=internal
+pod-43   1/1     Running   0          5m20s   env=prod,mode=exam,type=internal
+pod-23   1/1     Running   0          5m21s   env=dev,mode=exam,type=external
+pod-32   1/1     Running   0          5m20s   env=prod,mode=standard,type=internal
+pod-21   1/1     Running   0          5m20s   env=prod,mode=exam,type=external
+
+
+
+Looks like there are a lot of pods created to confuse us. But we are only concerned with the labels of pod-23 and pod-21.
+
+
+
+As we can see both the required pods have labels mode=exam,type=external in common. Let's confirm that using kubectl too:
+
+
+
+student-node ~ ➜  kubectl get pod -l mode=exam,type=external -n spectra-1267                                    
+NAME     READY   STATUS    RESTARTS   AGE
+pod-23   1/1     Running   0          9m18s
+pod-21   1/1     Running   0          9m17s
+
+
+
+Nice!! Now as we have figured out the labels, we can proceed further with the creation of the service:
+
+
+
+student-node ~ ➜  kubectl create service clusterip service-3421-svcn -n spectra-1267 --tcp=8080:80 --dry-run=client -o yaml > service-3421-svcn.yaml
+
+
+
+Now modify the service definition with selectors as required before applying to k8s cluster:
+
+
+
+student-node ~ ➜  cat service-3421-svcn.yaml 
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app: service-3421-svcn
+  name: service-3421-svcn
+  namespace: spectra-1267
+spec:
+  ports:
+  - name: 8080-80
+    port: 8080
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: service-3421-svcn  # delete 
+    mode: exam    # add
+    type: external  # add
+  type: ClusterIP
+status:
+  loadBalancer: {}
+
+
+
+Finally let's apply the service definition:
+
+
+
+student-node ~ ➜  kubectl apply -f service-3421-svcn.yaml
+service/service-3421 created
+
+student-node ~ ➜  k get ep service-3421-svcn -n spectra-1267
+NAME           ENDPOINTS                     AGE
+service-3421   10.42.0.15:80,10.42.0.17:80   52s
+
+
+
+To store all the pod name along with their IP's , we could use imperative command as shown below:
+
+
+
+student-node ~ ➜  kubectl get pods -n spectra-1267 -o=custom-columns='POD_NAME:metadata.name,IP_ADDR:status.podIP' --sort-by=.status.podIP
+
+POD_NAME   IP_ADDR
+pod-12     10.42.0.18
+pod-23     10.42.0.19
+pod-34     10.42.0.20
+pod-21     10.42.0.21
+...
+# store the output to /root/pod_ips
+student-node ~ ➜  kubectl get pods -n spectra-1267 -o=custom-columns='POD_NAME:metadata.name,IP_ADDR:status.podIP' --sort-by=.status.podIP > /root/pod_ips_cka05_svcn
+
+=============================================
