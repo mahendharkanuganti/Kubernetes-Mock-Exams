@@ -1,0 +1,205 @@
+
+
+
+kubectl logs -n beta-cka01-arch beta-pod-cka01-arch | tail -n +2 	
+
+
+Que1:
+A pod named beta-pod-cka01-arch has been created in the beta-cka01-arch namespace. Inspect the logs and save all logs starting with the string ERROR in file /root/beta-pod-cka01-arch_errors on the student-node.
+
+Ans:
+---
+kubectl logs -n beta-cka01-arch beta-pod-cka01-arch | tail -n +2 > /root/beta-pod-cka01-arch_errors
+
+
+
+=============
+
+Que2:
+---
+
+A storage class called coconut-stc-cka01-str was created earlier.
+
+
+Use this storage class to create a persistent volume called coconut-pv-cka01-str as per below requirements:
+
+
+- Capacity should be 100Mi.
+
+- The volume type should be hostpath and the path should be /opt/coconut-stc-cka01-str.
+
+- Use coconut-stc-cka01-str storage class.
+
+- This volume must be created on cluster1-node01 (the /opt/coconut-stc-cka01-str directory already exists on this node).
+
+- It must have a label with key: storage-tier with value: gold.
+
+
+Also create a persistent volume claim with the name coconut-pvc-cka01-str as per below specs:
+
+
+- Request 50Mi of storage from coconut-pv-cka01-str PV, it must use matchLabels to use the PV.
+
+- Use coconut-stc-cka01-str storage class.
+
+- The access mode must be ReadWriteMany
+
+
+Ans:
+---
+First set the context to cluster1
+
+kubectl config use-context cluster1
+Create a yaml template as below:
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: coconut-pv-cka01-str
+  labels: 
+    storage-tier: gold
+spec:
+  capacity:
+    storage: 100Mi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: /opt/coconut-stc-cka01-str
+  storageClassName: coconut-stc-cka01-str
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - cluster1-node01
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: coconut-pvc-cka01-str
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Mi
+  storageClassName: coconut-stc-cka01-str
+  selector: 
+    matchLabels:
+      storage-tier: gold
+3. Apply the templete.
+kubectl apply -f <templete-name>.yaml
+
+===========================
+
+Que3:
+---
+
+Create a pod with name tester-cka02-svcn in dev-cka02-svcn namespace with image registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3. Make sure to use command sleep 3600 with restart policy set to Always .
+
+
+Once the tester-cka02-svcn pod is running, store the output of the command nslookup kubernetes.default from tester pod into the file /root/dns_output on student-node.
+
+
+Ans:
+---
+Change to the cluster1 context before attempting the task:
+
+kubectl config use-context cluster1
+
+
+
+Since the "dev-cka02-svcn" namespace doesn't exist, let's create it first:
+
+
+kubectl create ns dev-cka02-svcn
+
+
+
+Create the pod as per the requirements:
+
+
+
+kubectl apply -f - << EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tester-cka02-svcn
+  namespace: dev-cka02-svcn
+spec:
+  containers:
+  - name: tester-cka02-svcn
+    image: registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3
+    command:
+      - sleep
+      - "3600"
+  restartPolicy: Always
+EOF
+
+
+
+Now let's test if the nslookup command is working :
+
+
+student-node ~ ➜  kubectl exec -n dev-cka02-svcn -i -t tester-cka02-svcn -- nslookup kubernetes.default
+;; connection timed out; no servers could be reached
+
+command terminated with exit code 1
+
+
+
+Looks like something is broken at the moment, if we observe the kube-system namespace, we will see no coredns pods are not running which is creating the problem, let's scale them for the nslookup command to work:
+
+
+kubectl scale deployment -n kube-system coredns --replicas=2
+
+
+
+Now let store the correct output into the /root/dns_output on student-node :
+
+
+kubectl exec -n dev-cka02-svcn -i -t tester-cka02-svcn -- nslookup kubernetes.default >> /root/dns_output
+
+
+
+We should have something similar to below output:
+
+
+
+student-node ~ ➜  cat /root/dns_output
+Server:         10.96.0.10
+Address:        10.96.0.10#53
+
+Name:   kubernetes.default.svc.cluster.local
+Address: 10.96.0.1
+
+========================
+
+Que4:
+---
+
+Create a loadbalancer service with name wear-service-cka09-svcn to expose the deployment webapp-wear-cka09-svcn application in app-space namespace.
+
+
+Ans:
+---
+
+Switch to cluster3 :
+
+
+
+kubectl config use-context cluster3
+
+
+
+On student node run the command:
+
+
+student-node ~ ➜  kubectl expose -n app-space deployment webapp-wear-cka09-svcn --type=LoadBalancer --name=wear-service-cka09-svcn --port=8080
+service/wear-service-cka09-svcn exposed
+
+student-node ~ ➜  k get svc -n app-space
+NAME                      TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)          AGE
+wear-service-cka09-svcn   LoadBalancer   10.43.68.233   172.25.0.14   8080:32109/TCP   14s
