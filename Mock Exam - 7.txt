@@ -1,0 +1,645 @@
+Que1:
+---
+
+Create a service account called pink-sa-cka24-arch. Further create a cluster role called pink-role-cka24-arch with full permissions on all resources in the core api group under default namespace in cluster1.
+
+
+Finally create a cluster role binding called pink-role-binding-cka24-arch to bind pink-role-cka24-arch cluster role with pink-sa-cka24-arch service account.
+
+
+Ans:
+---
+
+Create the service account, cluster role and role binding:
+
+student-node ~ ➜ kubectl --context cluster1 create serviceaccount pink-sa-cka24-arch
+student-node ~ ➜ kubectl --context cluster1 create clusterrole pink-role-cka24-arch --resource=* --verb=*
+student-node ~ ➜ kubectl --context cluster1 create clusterrolebinding pink-role-binding-cka24-arch --clusterrole=pink-role-cka24-arch --serviceaccount=default:pink-sa-cka24-arch
+
+================
+
+Que2:
+---
+One of the nginx based pod called cyan-pod-cka28-trb is running under cyan-ns-cka28-trb namespace and it is exposed within the cluster using cyan-svc-cka28-trb service.
+
+This is a restricted pod so a network policy called cyan-np-cka28-trb has been created in the same namespace to apply some restrictions on this pod.
+
+
+Two other pods called cyan-white-cka28-trb1 and cyan-black-cka28-trb are also running in the default namespace.
+
+
+The nginx based app running on the cyan-pod-cka28-trb pod is exposed internally on the default nginx port (80).
+
+
+Expectation: This app should only be accessible from the cyan-white-cka28-trb1 pod.
+
+
+Problem: This app is not accessible from anywhere.
+
+
+Troubleshoot this issue and fix the connectivity as per the requirement listed above.
+
+
+Note: You can exec into cyan-white-cka28-trb and cyan-black-cka28-trb pods and test connectivity using the curl utility.
+
+
+You may update the network policy, but make sure it is not deleted from the cyan-ns-cka28-trb namespace.
+
+
+Ans:
+---
+
+Let's look into the network policy
+
+kubectl edit networkpolicy cyan-np-cka28-trb -n cyan-ns-cka28-trb
+Under spec: -> egress: you will notice there is not cidr: block has been added, since there is no restrcitions on egress traffic so we can update it as below. Further you will notice that the port used in the policy is 8080 but the app is running on default port which is 80 so let's update this as well (under egress and ingress):
+
+Change port: 8080 to port: 80
+- ports:
+  - port: 80
+    protocol: TCP
+  to:
+  - ipBlock:
+      cidr: 0.0.0.0/0
+Now, lastly notice that there is no POD selector has been used in ingress section but this app is supposed to be accessible from cyan-white-cka28-trb pod under default namespace. So let's edit it to look like as below:
+
+ingress:
+- from:
+  - namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: default
+   podSelector:
+      matchLabels:
+        app: cyan-white-cka28-trb
+Now, let's try to access the app from cyan-white-pod-cka28-trb
+
+kubectl exec -it cyan-white-cka28-trb -- sh
+curl cyan-svc-cka28-trb.cyan-ns-cka28-trb.svc.cluster.local
+
+Also make sure its not accessible from the other pod(s)
+
+kubectl exec -it cyan-black-cka28-trb -- sh
+curl cyan-svc-cka28-trb.cyan-ns-cka28-trb.svc.cluster.local
+
+It should not work from this pod. So its looking good now.
+
+
+===================================
+
+Que3:
+---
+
+The controlplane node called cluster4-controlplane in the cluster4 cluster is planned for a regular maintenance. In preparation for this maintenance work, we need to take backups of this cluster. However, something is broken at the moment!
+
+
+Troubleshoot the issues and take a snapshot of the ETCD database using the etcdctl utility at the location /opt/etcd-boot-cka18-trb.db.
+
+
+Note: Make sure etcd listens at its default port. Also you can SSH to the cluster4-controlplane host using the ssh cluster4-controlplane command from the student-node.
+
+
+Ans:
+---
+
+SSH into cluster4-controlplane host.
+ssh cluster4-controlplane
+Let's take etcd backup
+
+ETCDCTL_API=3 etcdctl --endpoints=https://[127.0.0.1]:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/etcd-boot-cka18-trb.db
+
+It might stuck for forever, let's see why that would happen. Try to list the PODs first
+
+kubectl get pod -A
+There might an error like
+
+The connection to the server cluster4-controlplane:6443 was refused - did you specify the right host or port?
+There seems to be some issue with the cluster so let's look into the logs
+
+journalctl -u kubelet -f
+You will see a lot of connect: connection refused erros but that must be because the different cluster components are not able to connect to the api server so try to filter out these logs to look more closlyDDDDDDD
+===============================
+
+Que4:
+---
+
+A pod called elastic-app-cka02-arch is running in the default namespace. The YAML file for this pod is available at /root/elastic-app-cka02-arch.yaml on the student-node. The single application container in this pod writes logs to the file /var/log/elastic-app.log.
+
+
+One of our logging mechanisms needs to read these logs to send them to an upstream logging server but we don't want to increase the read overhead for our main application container so recreate this POD with an additional sidecar container that will run along with the application container and print to the STDOUT by running the command tail -f /var/log/elastic-app.log. You can use busybox image for this sidecar container.
+
+
+Ans:
+---
+
+Recreate the pod with a new container called sidecar. Update the /root/elastic-app-cka02-arch.yaml YAML file as shown below:
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: elastic-app-cka02-arch
+spec:
+  containers:
+  - name: elastic-app
+    image: busybox:1.28
+    args:
+    - /bin/sh
+    - -c
+    - >
+      mkdir /var/log; 
+      i=0;
+      while true;
+      do
+        echo "$(date) INFO $i" >> /var/log/elastic-app.log;
+        i=$((i+1));
+        sleep 1;
+      done
+    volumeMounts:
+    - name: varlog
+      mountPath: /var/log
+  - name: sidecar
+    image: busybox:1.28
+    args: [/bin/sh, -c, 'tail -f  /var/log/elastic-app.log']
+    volumeMounts:
+    - name: varlog
+      mountPath: /var/log
+  volumes:
+  - name: varlog
+    emptyDir: {}
+
+
+
+Next, recreate the pod:
+
+student-node ~ ➜ kubectl replace -f /root/elastic-app-cka02-arch.yaml --force --context cluster3
+pod "elastic-app-cka02-arch" deleted
+pod/elastic-app-cka02-arch replaced
+
+student-node ~ ➜ 
+
+================================================
+
+Que5:
+---
+
+The blue-dp-cka09-trb deployment is having 0 out of 1 pods running. Fix the issue to make sure that pod is up and running.
+
+
+Ans:
+---
+
+List the pods
+kubectl get pod
+Most probably you see Init:Error or Init:CrashLoopBackOff for the corresponding pod.
+
+Look into the logs
+kubectl logs blue-dp-cka09-trb-xxxx -c init-container
+You will see an error something like
+
+sh: can't open 'echo 'Welcome!'': No such file or directory
+Edit the deployment
+kubectl edit deploy blue-dp-cka09-trb
+Under initContainers: -> - command: add -c to the next line of - sh, so final command should look like this
+   initContainers:
+   - command:
+     - sh
+     - -c
+     - echo 'Welcome!'
+If you will check pod then it must be failing again but with different error this time, let's find that out
+
+kubectl get event --field-selector involvedObject.name=blue-dp-cka09-trb-xxxxx
+You will see an error something like
+
+Warning   Failed      pod/blue-dp-cka09-trb-69dd844f76-rv9z8   Error: failed to create containerd task: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: error mounting "/var/lib/kubelet/pods/98182a41-6d6d-406a-a3e2-37c33036acac/volumes/kubernetes.io~configmap/nginx-config" to rootfs at "/etc/nginx/nginx.conf": mount /var/lib/kubelet/pods/98182a41-6d6d-406a-a3e2-37c33036acac/volumes/kubernetes.io~configmap/nginx-config:/etc/nginx/nginx.conf (via /proc/self/fd/6), flags: 0x5001: not a directory: unknown
+Edit the deployment again
+kubectl edit deploy blue-dp-cka09-trb
+Under volumeMounts: -> - mountPath: /etc/nginx/nginx.conf -> name: nginx-config add subPath: nginx.conf and save the changes.
+Finally the pod should be in running state.
+
+======================================
+
+Que6:
+---
+Create a storage class called orange-stc-cka07-str as per the properties given below:
+
+
+- Provisioner should be kubernetes.io/no-provisioner.
+
+- Volume binding mode should be WaitForFirstConsumer.
+
+
+Next, create a persistent volume called orange-pv-cka07-str as per the properties given below:
+
+
+- Capacity should be 150Mi.
+
+- Access mode should be ReadWriteOnce.
+
+- Reclaim policy should be Retain.
+
+- It should use storage class orange-stc-cka07-str.
+
+- Local path should be /opt/orange-data-cka07-str.
+
+- Also add node affinity to create this value on cluster1-controlplane.
+
+
+Finally, create a persistent volume claim called orange-pvc-cka07-str as per the properties given below:
+
+
+- Access mode should be ReadWriteOnce.
+
+- It should use storage class orange-stc-cka07-str.
+
+- Storage request should be 128Mi.
+
+- The volume should be orange-pv-cka07-str.
+
+
+Ans:
+---
+
+Create a yaml file as below:
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: orange-stc-cka07-str
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: orange-pv-cka07-str
+spec:
+  capacity:
+    storage: 150Mi
+  accessModes:
+  - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: orange-stc-cka07-str
+  local:
+    path: /opt/orange-data-cka07-str
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - cluster1-controlplane
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: orange-pvc-cka07-str
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: orange-stc-cka07-str
+  volumeName: orange-pv-cka07-str
+  resources:
+    requests:
+      storage: 128Mi
+Apply the template:
+kubectl apply -f <template-file-name>.yaml
+
+===============================
+
+Que7:
+---
+Create a nginx pod called nginx-resolver-cka06-svcn using image nginx, expose it internally with a service called nginx-resolver-service-cka06-svcn.
+
+
+
+Test that you are able to look up the service and pod names from within the cluster. Use the image: busybox:1.28 for dns lookup. Record results in /root/CKA/nginx.svc.cka06.svcn and /root/CKA/nginx.pod.cka06.svcn
+
+
+
+Ans:
+---
+
+To create a pod nginx-resolver-cka06-svcn and expose it internally:
+
+
+
+student-node ~ ➜ kubectl run nginx-resolver-cka06-svcn --image=nginx 
+student-node ~ ➜ kubectl expose pod/nginx-resolver-cka06-svcn --name=nginx-resolver-service-cka06-svcn --port=80 --target-port=80 --type=ClusterIP 
+
+
+
+To create a pod test-nslookup. Test that you are able to look up the service and pod names from within the cluster:
+
+
+
+student-node ~ ➜  kubectl run test-nslookup --image=busybox:1.28 --rm -it --restart=Never -- nslookup nginx-resolver-service-cka06-svcn
+student-node ~ ➜  kubectl run test-nslookup --image=busybox:1.28 --rm -it --restart=Never -- nslookup nginx-resolver-service-cka06-svcn > /root/CKA/nginx.svc.cka06.svcn
+
+
+
+Get the IP of the nginx-resolver-cka06-svcn pod and replace the dots(.) with hyphon(-) which will be used below.
+
+student-node ~ ➜  kubectl get pod nginx-resolver-cka06-svcn -o wide
+student-node ~ ➜  IP=`kubectl get pod nginx-resolver-cka06-svcn -o wide --no-headers | awk '{print $6}' | tr '.' '-'`
+student-node ~ ➜  kubectl run test-nslookup --image=busybox:1.28 --rm -it --restart=Never -- nslookup $IP.default.pod > /root/CKA/nginx.pod.cka06.svcn
+
+===================================
+
+Que8:
+---
+Create a ReplicaSet with name checker-cka10-svcn in ns-12345-svcn namespace with image registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3.
+
+
+Make sure to specify the below specs as well:
+
+
+command sleep 3600
+replicas set to 2
+container name: dns-image
+
+
+
+Once the checker pods are up and running, store the output of the command nslookup kubernetes.default from any one of the checker pod into the file /root/dns-output-12345-cka10-svcn on student-node.
+
+
+Ans:
+---
+
+Create the ReplicaSet as per the requirements:
+
+
+
+kubectl apply -f - << EOF
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  creationTimestamp: null
+  name: ns-12345-svcn
+spec: {}
+status: {}
+
+---
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: checker-cka10-svcn
+  namespace: ns-12345-svcn
+  labels:
+    app: dns
+    tier: testing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      tier: testing
+  template:
+    metadata:
+      labels:
+        tier: testing
+    spec:
+      containers:
+      - name: dns-image
+        image: registry.k8s.io/e2e-test-images/jessie-dnsutils:1.3
+        command:
+          - sleep
+          - "3600"
+EOF
+
+
+
+Now let's test if the nslookup command is working :
+
+
+student-node ~ ➜  k get pods -n ns-12345-svcn 
+NAME                       READY   STATUS    RESTARTS   AGE
+checker-cka10-svcn-d2cd2   1/1     Running   0          12s
+checker-cka10-svcn-qj8rc   1/1     Running   0          12s
+
+student-node ~ ➜  POD_NAME=`k get pods -n ns-12345-svcn --no-headers | head -1 | awk '{print $1}'`
+
+student-node ~ ➜  kubectl exec -n ns-12345-svcn -i -t $POD_NAME -- nslookup kubernetes.default
+;; connection timed out; no servers could be reached
+
+command terminated with exit code 1
+
+
+
+There seems to be a problem with the name resolution. Let's check if our coredns pods are up and if any service exists to reach them:
+
+
+
+student-node ~ ➜  k get pods -n kube-system | grep coredns
+coredns-6d4b75cb6d-cprjz                        1/1     Running   0             42m
+coredns-6d4b75cb6d-fdrhv                        1/1     Running   0             42m
+
+student-node ~ ➜  k get svc -n kube-system 
+NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                  AGE
+kube-dns   ClusterIP   10.96.0.10   <none>        53/UDP,53/TCP,9153/TCP   62m
+
+
+
+Everything looks okay here but the name resolution problem exists, let's see if the kube-dns service have any active endpoints:
+
+student-node ~ ➜  kubectl get ep -n kube-system kube-dns 
+NAME       ENDPOINTS   AGE
+kube-dns   <none>      63m
+
+
+
+Finally, we have our culprit.
+
+
+If we dig a little deeper, we will it is using wrong labels and selector:
+
+
+
+student-node ~ ➜  kubectl describe svc -n kube-system kube-dns 
+Name:              kube-dns
+Namespace:         kube-system
+....
+Selector:          k8s-app=core-dns
+Type:              ClusterIP
+...
+
+student-node ~ ➜  kubectl get deploy -n kube-system --show-labels | grep coredns
+coredns   2/2     2            2           66m   k8s-app=kube-dns
+
+
+
+Let's update the kube-dns service it to point to correct set of pods:
+
+
+
+student-node ~ ➜  kubectl patch service -n kube-system kube-dns -p '{"spec":{"selector":{"k8s-app": "kube-dns"}}}'
+service/kube-dns patched
+
+student-node ~ ➜  kubectl get ep -n kube-system kube-dns 
+NAME       ENDPOINTS                                              AGE
+kube-dns   10.50.0.2:53,10.50.192.1:53,10.50.0.2:53 + 3 more...   69m
+
+
+
+NOTE: We can use any method to update kube-dns service. In our case, we have used kubectl patch command.
+
+
+
+
+Now let's store the correct output to /root/dns-output-12345-cka10-svcn:
+
+
+
+student-node ~ ➜  kubectl exec -n ns-12345-svcn -i -t $POD_NAME -- nslookup kubernetes.default
+Server:         10.96.0.10
+Address:        10.96.0.10#53
+
+Name:   kubernetes.default.svc.cluster.local
+Address: 10.96.0.1
+
+student-node ~ ➜  kubectl exec -n ns-12345-svcn -i -t $POD_NAME -- nslookup kubernetes.default > /root/dns-output-12345-cka10-svcn
+
+=================================
+
+Que9:
+---
+Create a ClusterIP service .i.e. service-3421-svcn in the spectra-1267 ns which should expose the pods namely pod-23 and pod-21 with port set to 8080 and targetport to 80.
+
+
+
+Part II:
+
+
+
+Store the pod names and their ip addresses from the spectra-1267 ns at /root/pod_ips_cka05_svcn where the output is sorted by their IP's.
+
+Please ensure the format as shown below:
+
+
+
+POD_NAME        IP_ADDR
+pod-1           ip-1
+pod-3           ip-2
+pod-2           ip-3
+...
+
+Ans:
+---
+The easiest way to route traffic to a specific pod is by the use of labels and selectors . List the pods along with their labels:
+
+
+
+student-node ~ ➜  kubectl get pods --show-labels -n spectra-1267
+NAME     READY   STATUS    RESTARTS   AGE     LABELS
+pod-12   1/1     Running   0          5m21s   env=dev,mode=standard,type=external
+pod-34   1/1     Running   0          5m20s   env=dev,mode=standard,type=internal
+pod-43   1/1     Running   0          5m20s   env=prod,mode=exam,type=internal
+pod-23   1/1     Running   0          5m21s   env=dev,mode=exam,type=external
+pod-32   1/1     Running   0          5m20s   env=prod,mode=standard,type=internal
+pod-21   1/1     Running   0          5m20s   env=prod,mode=exam,type=external
+
+
+
+Looks like there are a lot of pods created to confuse us. But we are only concerned with the labels of pod-23 and pod-21.
+
+
+
+As we can see both the required pods have labels mode=exam,type=external in common. Let's confirm that using kubectl too:
+
+
+
+student-node ~ ➜  kubectl get pod -l mode=exam,type=external -n spectra-1267                                    
+NAME     READY   STATUS    RESTARTS   AGE
+pod-23   1/1     Running   0          9m18s
+pod-21   1/1     Running   0          9m17s
+
+
+
+Nice!! Now as we have figured out the labels, we can proceed further with the creation of the service:
+
+
+
+student-node ~ ➜  kubectl create service clusterip service-3421-svcn -n spectra-1267 --tcp=8080:80 --dry-run=client -o yaml > service-3421-svcn.yaml
+
+
+
+Now modify the service definition with selectors as required before applying to k8s cluster:
+
+
+
+student-node ~ ➜  cat service-3421-svcn.yaml 
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app: service-3421-svcn
+  name: service-3421-svcn
+  namespace: spectra-1267
+spec:
+  ports:
+  - name: 8080-80
+    port: 8080
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: service-3421-svcn  # delete 
+    mode: exam    # add
+    type: external  # add
+  type: ClusterIP
+status:
+  loadBalancer: {}
+
+
+
+Finally let's apply the service definition:
+
+
+
+student-node ~ ➜  kubectl apply -f service-3421-svcn.yaml
+service/service-3421 created
+
+student-node ~ ➜  k get ep service-3421-svcn -n spectra-1267
+NAME           ENDPOINTS                     AGE
+service-3421   10.42.0.15:80,10.42.0.17:80   52s
+
+
+
+To store all the pod name along with their IP's , we could use imperative command as shown below:
+
+
+
+student-node ~ ➜  kubectl get pods -n spectra-1267 -o=custom-columns='POD_NAME:metadata.name,IP_ADDR:status.podIP' --sort-by=.status.podIP
+
+POD_NAME   IP_ADDR
+pod-12     10.42.0.18
+pod-23     10.42.0.19
+pod-34     10.42.0.20
+pod-21     10.42.0.21
+...
+
+# store the output to /root/pod_ips
+student-node ~ ➜  kubectl get pods -n spectra-1267 -o=custom-columns='POD_NAME:metadata.name,IP_ADDR:status.podIP' --sort-by=.status.podIP > /root/pod_ips_cka05_svcn
+
+=================================
+Que10:
+---
+
+Deploy a messaging-cka07-svcn pod using the redis:alpine image with the labels set to tier=msg.
+
+
+
+Now create a service messaging-service-cka07-svcn to expose the messaging-cka07-svcn application within the cluster on port 6379.
+
+
+
+TIP: Use imperative commands.
+
+
+Ans:
+---
+On student-node, use the command kubectl run messaging-cka07-svcn --image=redis:alpine -l tier=msg
+
+
+
+Now run the command: kubectl expose pod messaging-cka07-svcn --port=6379 --name messaging-service-cka07-svcn.
